@@ -1,0 +1,218 @@
+from openexp.canvas import canvas
+from openexp.mouse import mouse
+from openexp.keyboard import keyboard
+from psychopy import core  # Importa core per utilizzare Clock
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+from datetime import datetime
+
+# Funzione per formattare i millisecondi in secondi con tre decimali
+def format_time(milliseconds):
+    seconds = milliseconds / 1000  # Converte i millisecondi in secondi
+    return f"{seconds:.3f}"  # Usa tre cifre decimali
+
+# Inizializza il clock per misurare il tempo di reazione e gli eventi
+rt_clock = core.Clock()
+
+# Flag per determinare la conclusione dell'esperimento
+experiment_finished = False
+
+try:
+    my_canvas = canvas(exp)
+    my_mouse = mouse(exp, visible=True)  # Assicura che il mouse sia visibile
+    my_keyboard = keyboard(exp, keylist=['escape'], timeout=0)
+    holding_time = 2000  # millisecondi per mantenere la lettera in posizione
+
+    target_line_y = 0
+    line_threshold = 20  # Soglia per definire "sulla linea"
+
+    subject_nr = var.subject_nr  # Assumi che subject_nr sia memorizzato nella variabile var
+
+    letters = {
+        'N': {'text': 'N', 'x': 0, 'y': 300, 'placed': False, 'start_time': None},
+        'P': {'text': 'P', 'x': 0, 'y': 300, 'placed': False, 'start_time': None},
+        'F': {'text': 'F', 'x': 0, 'y': 300, 'placed': False, 'start_time': None}
+    }
+
+    # Liste per tracciare i movimenti del mouse e i tempi di posizionamento
+    tracking_records = []  # Lista per memorizzare i dati di tracking
+    placement_records = []  # Lista per memorizzare i dati di posizionamento
+
+    def redraw_canvas(current_letter=None):
+        my_canvas.clear()
+        my_canvas.line(-321, target_line_y, 321, target_line_y)
+        for key, letter in letters.items():
+            if key == current_letter or letter['placed']:
+                color = '#00FF00' if letter['placed'] else 'white'
+                my_canvas.text(letter['text'], center=True, x=letter['x'], y=letter['y'], color=color)
+        my_canvas.show()
+        my_mouse.show_cursor()  # Forza la visibilità del cursore
+
+    selected_letter = None  # Questa variabile tiene traccia della lettera selezionata fuori dal loop
+    last_update_time = rt_clock.getTime()
+
+    for current_letter in ['N', 'P', 'F']:
+        letters[current_letter]['placed'] = False
+        letters[current_letter]['x'] = 0
+        letters[current_letter]['y'] = 300
+        letters[current_letter]['start_time'] = None  # Reimposta il tempo di inizio per ogni lettera
+        selected_letter = None
+        start_holding_time = None
+
+        my_mouse.flush()
+        redraw_canvas(current_letter)
+
+        while not letters[current_letter]['placed']:
+            button, pos, timestamp = my_mouse.get_click(timeout=0)
+
+            if button and selected_letter is None:
+                x, y = pos
+                if not letters[current_letter]['placed'] and abs(x - letters[current_letter]['x']) < 20 and abs(y - letters[current_letter]['y']) < 20:
+                    selected_letter = current_letter
+                    if letters[current_letter]['start_time'] is None:
+                        letters[current_letter]['start_time'] = rt_clock.getTime()  # Imposta il tempo di inizio solo al primo drag
+                    redraw_canvas(current_letter)
+
+            if button and selected_letter:
+                x, y = pos
+                current_time = rt_clock.getTime()
+
+                # Registra solo se la posizione cambia
+                if letters[selected_letter]['x'] != x or letters[selected_letter]['y'] != y:
+                    letters[selected_letter]['x'], letters[selected_letter]['y'] = x, y
+
+                    if current_time - last_update_time > 0.05:  # 50 ms
+                        redraw_canvas(current_letter)
+                        last_update_time = current_time
+
+                    # Calcola il tempo relativo in millisecondi e formatta
+                    relative_drag_time = (current_time - letters[current_letter]['start_time']) * 1000  # Tempo in millisecondi
+                    formatted_time = format_time(relative_drag_time)
+                    tracking_records.append((subject_nr, formatted_time, x, y, selected_letter))
+
+                if abs(y - target_line_y) <= line_threshold and not start_holding_time:
+                    start_holding_time = current_time
+                elif abs(y - target_line_y) > line_threshold and start_holding_time:
+                    start_holding_time = None
+
+                if start_holding_time and (current_time - start_holding_time) * 1000 >= holding_time:
+                    if letters[selected_letter]['x'] < -321:
+                        letters[selected_letter]['x'] = -321
+                    elif letters[selected_letter]['x'] > 321:
+                        letters[selected_letter]['x'] = 321
+
+                    letters[selected_letter]['placed'] = True
+                    var.position_x = letters[selected_letter]['x']
+                    var.letter = current_letter
+                    var.rt = format_time((current_time - start_holding_time) * 1000)  # Usa il formato aggiornato
+                    log.write_vars()
+
+                    drag_end_time = current_time
+                    duration = (drag_end_time - letters[selected_letter]['start_time']) * 1000
+
+                    # Aggiungi il tempo finale di tracciamento al record di tracciamento
+                    formatted_duration = format_time(duration)
+                    tracking_records.append((subject_nr, formatted_duration, x, y, selected_letter))
+
+                    # Aggiungi ai record di posizionamento
+                    placement_records.append((subject_nr, current_letter, formatted_duration, f"{int(letters[selected_letter]['x'])}, {int(target_line_y)}"))
+
+                    redraw_canvas(current_letter)
+                    break
+
+            elif not button and selected_letter is not None:
+                selected_letter = None
+                start_holding_time = None
+
+            key, time_key = my_keyboard.get_key()
+            if key == 'escape':
+                print("The experiment was stopped prematurely by the user.")
+                experiment_finished = True
+                break
+
+        if experiment_finished:
+            break
+
+        redraw_canvas()
+        core.wait(0.05)  # Sostituisce clock.sleep con core.wait
+
+    experiment_finished = True
+
+except Exception as e:
+    print(f"An error occurred: {e}")
+
+if experiment_finished:
+    print("All letters have been placed, ending the experiment.")
+
+    path_to_save = os.path.expanduser('~/Desktop/Lorenzo/Risultati chronesthesia')
+    os.makedirs(path_to_save, exist_ok=True)
+
+    current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    file_name_placement = f"subject_{subject_nr}_placement_{current_time}.csv"
+    file_path_placement = os.path.join(path_to_save, file_name_placement)
+
+    with open(file_path_placement, 'w') as file:
+        file.write('subject,letter,duration,coordinates\n')
+        for record in placement_records:
+            subject, letter, duration, coordinates = record
+            file.write(f'{subject},{letter},{duration},{coordinates}\n')
+
+    file_name_tracking = f"subject_{subject_nr}_tracking_{current_time}.csv"
+    file_path_tracking = os.path.join(path_to_save, file_name_tracking)
+
+    # Scrittura dei dati nel file CSV
+    with open(file_path_tracking, 'w') as file:
+        file.write('subject,relative_drag_time,x,y,letter\n')
+        for record in tracking_records:
+            subject, relative_drag_time, x, y, letter = record
+            file.write(f'{subject},{relative_drag_time},{x},{y},{letter}\n')
+
+    def plot_tracking_data(file_path, subject_nr, save_path):
+        tracking_data = pd.read_csv(file_path)
+        subject_data = tracking_data[tracking_data['subject'] == subject_nr]
+
+        plt.figure(figsize=(10, 8))
+        for letter in subject_data['letter'].unique():
+            letter_data = subject_data[subject_data['letter'] == letter]
+            plt.plot(
+                letter_data['x'],
+                letter_data['y'],
+                marker='o',
+                linestyle='-',
+                label=f'Letter {letter}',
+                markersize=2
+            )
+
+        plt.title(f'Tracking Data for Subject {subject_nr}')
+        plt.xlabel('X Coordinate')
+        plt.ylabel('Y Coordinate')
+        plt.legend()
+        plt.grid(True)
+        plt.gca().invert_yaxis()
+
+        image_path = os.path.join(save_path, f"subject_{subject_nr}_tracking_{current_time}.png")
+        plt.savefig(image_path)
+        plt.close()
+
+    plot_tracking_data(file_path_tracking, subject_nr, path_to_save)
+
+    def capture_screenshot(canvas, screenshot_path):
+        window = self.experiment.window  # Utilizza la finestra di PsychoPy
+        window.getMovieFrame()  # Cattura lo stato attuale della finestra
+        window.saveMovieFrames(screenshot_path)  # Salva l'immagine
+
+    final_canvas = canvas(exp)
+    final_canvas.clear()
+
+    for key, letter in letters.items():
+        color = '#00FF00' if letter['placed'] else 'white'
+        final_canvas.text(letter['text'], center=True, x=letter['x'], y=letter['y'], color=color)
+
+    final_canvas.line(-321, target_line_y, 321, target_line_y)
+    final_canvas.show()
+
+    screenshot_path = os.path.join(path_to_save, f"subject_{subject_nr}_final_screenshot_{current_time}.png")
+    capture_screenshot(final_canvas, screenshot_path)
+    
+    print(f"Screenshot della schermata finale salvata in: {screenshot_path}")
